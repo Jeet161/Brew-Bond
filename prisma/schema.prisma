@@ -1,0 +1,629 @@
+// Prisma schema for Beyond (Brew & Bond)
+// Real-World Social Discovery Network
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Identity, Authentication & Roles
+// -----------------------------------------------------------------------------
+
+enum UserRole {
+  PARTICIPANT
+  HOST
+  VENUE_MANAGER
+  MODERATOR
+  ADMIN
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+model User {
+  id                    String        @id @default(uuid())
+  email                 String?       @unique
+  emailVerified         DateTime?
+  phone                 String?       @unique
+  phoneVerified         DateTime?
+  image                 String?
+  name                  String?
+  role                  UserRole      @default(PARTICIPANT)
+  roles                 UserRole[]    @default([PARTICIPANT])
+  status                AccountStatus @default(ACTIVE)
+  isAgeEligible         Boolean       @default(false)
+  ageVerifiedAt         DateTime?
+  termsAcceptedAt       DateTime?
+  privacyAcceptedAt     DateTime?
+  suspendedAt           DateTime?
+  deletedAt             DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  // Relations
+  accounts              Account[]
+  sessions              Session[]
+  profile               Profile?
+  preferences           Preferences?
+  hostProfile           HostProfile?
+  hostApplications      HostApplication[]
+  managedVenues         VenueStaff[]
+  createdEvents         Event[]             @relation("EventHostUser")
+  bookings              Booking[]
+  attendedEvents        Attendance[]        @relation("AttendeeAttendance")
+  checkedInAttendees    Attendance[]        @relation("StaffCheckedIn")
+  ownedCircles          Circle[]            @relation("CircleOwner")
+  circleMemberships     CircleMembership[]
+  announcements         CircleAnnouncement[]
+  savedEvents           SavedEvent[]
+  reportsFiled          Report[]            @relation("ReporterUser")
+  blocksInitiated       Block[]             @relation("BlockingUser")
+  blocksReceived        Block[]             @relation("BlockedUser")
+  moderationActions     ModerationAction[]
+  notifications         Notification[]
+  auditLogs             AuditLog[]
+
+  @@index([status])
+  @@index([role])
+}
+
+model Account {
+  id                 String  @id @default(uuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String? @db.Text
+  access_token       String? @db.Text
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String? @db.Text
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// -----------------------------------------------------------------------------
+// User Profiles & Preferences
+// -----------------------------------------------------------------------------
+
+model Profile {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  displayName        String
+  bio                String?  @db.Text
+  city               String   @default("Guwahati")
+  neighbourhood      String?
+  avatarUrl          String?
+  isOnboarded        Boolean  @default(false)
+  isProfilePublic    Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([city, neighbourhood])
+}
+
+model Preferences {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  interests          String[] // e.g. ["coffee", "board_games", "food_walks", "photography"]
+  languages          String[] // e.g. ["English", "Assamese", "Hindi"]
+  preferredDays      String[] // e.g. ["Friday", "Saturday", "Sunday"]
+  preferredTimeOfDay String[] // e.g. ["Morning", "Afternoon", "Evening"]
+  groupSizeMax       Int      @default(12)
+  budgetMaxPaise     Int      @default(50000) // ₹500
+  accessibilityNeeds String?  @db.Text
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// -----------------------------------------------------------------------------
+// Venues & Venue Management
+// -----------------------------------------------------------------------------
+
+enum VenueVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+model Venue {
+  id                 String                  @id @default(uuid())
+  name               String
+  slug               String                  @unique
+  description        String?                 @db.Text
+  address            String
+  neighbourhood      String                  // e.g. "Uzan Bazaar", "Pan Bazaar", "Christian Basti"
+  city               String                  @default("Guwahati")
+  state              String                  @default("Assam")
+  postalCode         String?
+  latitude           Float?
+  longitude          Float?
+  contactPhone       String?
+  contactEmail       String?
+  isPhonePublic      Boolean                 @default(false)
+  isEmailPublic      Boolean                 @default(false)
+  facilities         String[]                // ["wifi", "ac", "parking", "outdoor_seating", "board_games"]
+  accessibilityNotes String?                 @db.Text
+  verificationStatus VenueVerificationStatus @default(PENDING)
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  staff              VenueStaff[]
+  events             Event[]
+
+  @@index([city, neighbourhood])
+  @@index([verificationStatus])
+}
+
+enum VenueRole {
+  OWNER
+  MANAGER
+  STAFF
+}
+
+model VenueStaff {
+  id        String    @id @default(uuid())
+  venueId   String
+  userId    String
+  role      VenueRole @default(STAFF)
+  createdAt DateTime  @default(now())
+
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([venueId, userId])
+}
+
+// -----------------------------------------------------------------------------
+// Host Economy & Applications
+// -----------------------------------------------------------------------------
+
+enum HostApplicationStatus {
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+}
+
+model HostApplication {
+  id              String                @id @default(uuid())
+  userId          String
+  bio             String                @db.Text
+  proposedFormats String[]              // e.g. ["Coffee conversation", "Board-game social"]
+  experience      String                @db.Text
+  sampleIdea      String                @db.Text
+  status          HostApplicationStatus @default(SUBMITTED)
+  reviewerNotes   String?               @db.Text
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+}
+
+model HostProfile {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  publicBio          String   @db.Text
+  specialties        String[]
+  isVerified         Boolean  @default(false)
+  ratingAverage      Float    @default(5.0)
+  totalEventsHosted  Int      @default(0)
+  approvedAt         DateTime @default(now())
+  isSuspended        Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// -----------------------------------------------------------------------------
+// Events & Lifecycles
+// -----------------------------------------------------------------------------
+
+enum EventCategory {
+  COFFEE_CONVERSATION
+  BOARD_GAMES
+  FOOD_WALK
+  PHOTOGRAPHY_WALK
+  CREATIVE_WORKSHOP
+  BEGINNER_SPORTS
+  OTHER
+}
+
+enum EventLifecycle {
+  DRAFT
+  PUBLISHED
+  COMPLETED
+  CANCELLED
+}
+
+enum JoinMode {
+  IMMEDIATE
+  APPROVAL_REQUIRED
+}
+
+model Event {
+  id                   String         @id @default(uuid())
+  title                String
+  slug                 String         @unique
+  description          String         @db.Text
+  category             EventCategory
+  lifecycle            EventLifecycle @default(DRAFT)
+  isSuspended          Boolean        @default(false) // Emergency moderation flag
+  hostId               String
+  venueId              String
+  circleId             String?
+  
+  startTime            DateTime
+  endTime              DateTime
+  timezone             String         @default("Asia/Kolkata")
+  
+  capacity             Int            // Maximum confirmed participants
+  joinMode             JoinMode       @default(IMMEDIATE)
+  bookingDeadline      DateTime
+  cancellationDeadline DateTime
+  
+  priceInPaise         Int            @default(0) // ₹0 for free MVP events
+  currency             String         @default("INR")
+  
+  rules                String?        @db.Text
+  accessibilityNotes   String?        @db.Text
+  imageUrl             String?
+  
+  version              Int            @default(1) // Optimistic concurrency check
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  host                 User           @relation("EventHostUser", fields: [hostId], references: [id])
+  venue                Venue          @relation(fields: [venueId], references: [id])
+  circle               Circle?        @relation(fields: [circleId], references: [id])
+  
+  bookings             Booking[]
+  savedByUsers         SavedEvent[]
+
+  @@index([lifecycle, isSuspended, startTime])
+  @@index([category])
+  @@index([venueId])
+  @@index([hostId])
+}
+
+// -----------------------------------------------------------------------------
+// Bookings & Concurrency
+// -----------------------------------------------------------------------------
+
+enum BookingStatus {
+  REQUESTED
+  CONFIRMED
+  WAITLISTED
+  REJECTED
+  CANCELLED
+}
+
+model Booking {
+  id                 String        @id @default(uuid())
+  eventId            String
+  userId             String
+  status             BookingStatus @default(REQUESTED)
+  
+  requestedAt        DateTime      @default(now())
+  confirmedAt        DateTime?
+  cancelledAt        DateTime?
+  cancellationReason String?
+  cancelledByRole    String?       // "PARTICIPANT" | "HOST" | "ADMIN"
+  
+  waitlistPosition   Int?          // 1, 2, 3...
+  idempotencyKey     String?       @unique
+  
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  event              Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user               User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attendance         Attendance?
+
+  @@unique([eventId, userId]) // Only one booking per user per event
+  @@index([eventId, status])
+  @@index([userId, status])
+}
+
+model Attendance {
+  id           String    @id @default(uuid())
+  bookingId    String    @unique
+  userId       String
+  checkedInAt  DateTime  @default(now())
+  checkedInBy  String    // User ID of Host or Venue Staff
+  notes        String?
+
+  booking      Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  user         User      @relation("AttendeeAttendance", fields: [userId], references: [id])
+  staff        User      @relation("StaffCheckedIn", fields: [checkedInBy], references: [id])
+
+  @@index([userId])
+}
+
+// -----------------------------------------------------------------------------
+// Persistent Social Circles
+// -----------------------------------------------------------------------------
+
+enum CircleVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum CircleJoinMode {
+  OPEN
+  APPLICATION_REQUIRED
+}
+
+enum CircleStatus {
+  ACTIVE
+  ARCHIVED
+  SUSPENDED
+}
+
+model Circle {
+  id          String           @id @default(uuid())
+  name        String
+  slug        String           @unique
+  purpose     String           @db.Text
+  rules       String?          @db.Text
+  category    EventCategory
+  city        String           @default("Guwahati")
+  visibility  CircleVisibility @default(PUBLIC)
+  joinMode    CircleJoinMode   @default(OPEN)
+  capacity    Int              @default(50)
+  ownerId     String
+  status      CircleStatus     @default(ACTIVE)
+  imageUrl    String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  owner       User             @relation("CircleOwner", fields: [ownerId], references: [id])
+  memberships CircleMembership[]
+  events      Event[]
+  announcements CircleAnnouncement[]
+
+  @@index([status, city])
+  @@index([category])
+}
+
+enum CircleMemberRole {
+  MEMBER
+  MODERATOR
+  OWNER
+}
+
+enum CircleMemberStatus {
+  REQUESTED
+  ACTIVE
+  REJECTED
+  LEFT
+  REMOVED
+}
+
+model CircleMembership {
+  id        String             @id @default(uuid())
+  circleId  String
+  userId    String
+  role      CircleMemberRole   @default(MEMBER)
+  status    CircleMemberStatus @default(ACTIVE)
+  joinedAt  DateTime?
+  leftAt    DateTime?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  circle    Circle             @relation(fields: [circleId], references: [id], onDelete: Cascade)
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([circleId, userId])
+  @@index([circleId, status])
+}
+
+model CircleAnnouncement {
+  id        String   @id @default(uuid())
+  circleId  String
+  authorId  String
+  title     String
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+
+  circle    Circle   @relation(fields: [circleId], references: [id], onDelete: Cascade)
+  author    User     @relation(fields: [authorId], references: [id])
+
+  @@index([circleId, createdAt])
+}
+
+model SavedEvent {
+  id        String   @id @default(uuid())
+  userId    String
+  eventId   String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, eventId])
+}
+
+// -----------------------------------------------------------------------------
+// Trust, Safety & Moderation
+// -----------------------------------------------------------------------------
+
+enum ReportTargetType {
+  USER
+  EVENT
+  CIRCLE
+  HOST
+}
+
+enum ReportCategory {
+  HARASSMENT
+  INAPPROPRIATE_BEHAVIOR
+  SAFETY_CONCERN
+  MISLEADING_EVENT
+  NO_SHOW_HOST
+  OTHER
+}
+
+enum ReportStatus {
+  PENDING
+  INVESTIGATING
+  RESOLVED
+  DISMISSED
+}
+
+model Report {
+  id          String           @id @default(uuid())
+  reporterId  String
+  targetType  ReportTargetType
+  targetId    String           // ID of the User, Event, or Circle being reported
+  category    ReportCategory
+  description String           @db.Text
+  evidenceUrl String?
+  status      ReportStatus     @default(PENDING)
+  assignedTo  String?
+  resolution  String?          @db.Text
+  resolvedAt  DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  reporter    User             @relation("ReporterUser", fields: [reporterId], references: [id])
+  actions     ModerationAction[]
+
+  @@index([status, createdAt])
+  @@index([targetType, targetId])
+}
+
+model Block {
+  id          String   @id @default(uuid())
+  blockerId   String
+  blockedId   String
+  createdAt   DateTime @default(now())
+
+  blocker     User     @relation("BlockingUser", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked     User     @relation("BlockedUser", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+}
+
+model ModerationAction {
+  id          String   @id @default(uuid())
+  reportId    String?
+  actorId     String
+  actionTaken String   // e.g. "SUSPEND_USER", "REMOVE_EVENT", "DISMISS_REPORT"
+  reason      String   @db.Text
+  createdAt   DateTime @default(now())
+
+  report      Report?  @relation(fields: [reportId], references: [id])
+  actor       User     @relation(fields: [actorId], references: [id])
+
+  @@index([createdAt])
+}
+
+// -----------------------------------------------------------------------------
+// Notifications, Outbox & Audit Logs
+// -----------------------------------------------------------------------------
+
+enum NotificationType {
+  BOOKING_CONFIRMED
+  BOOKING_WAITLISTED
+  WAITLIST_PROMOTED
+  BOOKING_REJECTED
+  EVENT_REMINDER
+  EVENT_CANCELLED
+  EVENT_UPDATED
+  CIRCLE_ANNOUNCEMENT
+  REPORT_UPDATE
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String           @db.Text
+  linkUrl   String?
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model OutboxEvent {
+  id             String       @id @default(uuid())
+  eventType      String       // "BOOKING_CREATED", "USER_PROMOTED", "EVENT_CANCELLED"
+  payload        Json
+  status         OutboxStatus @default(PENDING)
+  retryCount     Int          @default(0)
+  maxRetries     Int          @default(5)
+  lastError      String?      @db.Text
+  deduplicationKey String     @unique
+  scheduledAt    DateTime     @default(now())
+  processedAt    DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([status, scheduledAt])
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorId     String?
+  action      String   // e.g. "EVENT_CREATED", "USER_SUSPENDED", "BOOKING_CANCELLED"
+  targetType  String   // e.g. "Event", "User", "Booking"
+  targetId    String
+  metadata    Json?
+  ipAddress   String?
+  createdAt   DateTime @default(now())
+
+  actor       User?    @relation(fields: [actorId], references: [id])
+
+  @@index([targetType, targetId])
+  @@index([createdAt])
+}
+
